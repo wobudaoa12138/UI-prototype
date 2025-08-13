@@ -84,7 +84,7 @@
 </script>
     
     
-    <!-- ======================= -->
+    
 
     <style>
         :root {
@@ -560,7 +560,9 @@ window.NOVEL_TEXT = `
 
 他抬头望着窗外，站台缓缓后退。霜花爬满的玻璃上，影子一闪一闪地掠过去——有人走，有人挥手，有人抱着东西急急跑着。火车驶出站台，风声开始贴在车皮上摩擦，像一阵阵低语。
 
-恰在这时，过道里有人抬着行李卷挤过来，肩角顶在座椅扶手上，扶手回弹，“哐”地磕在他膝头的包角。旧报纸表面“嗤”地裂开一道细缝，像嘴角被扯了一下。缝里露出灰蓝色的布头，布面紧实，纹路细密；再往里，是一抹更深的颜色，边缘微微发硬，像被水浸过又干了——也像陈旧的血痕。
+恰在这时，过道里有人抬着行李卷挤过来，肩角顶在座椅扶手上，扶手回弹，“哐”地磕在他膝头的包角。旧报纸表面“嗤”地裂开一道细缝，像嘴角被扯了一下。
+
+缝里露出灰蓝色的布头，布面紧实，纹路细密；再往里，是一抹更深的颜色，边缘微微发硬，像被水浸过又干了——也像陈旧的血痕。
 
 他的指尖在那一瞬停住，随即下意识把裂口按住。呼吸变浅：这东西，到底是什么？
 
@@ -582,7 +584,9 @@ window.NOVEL_TEXT = `
 
 婴儿的哭声终于在母亲轻轻的拍哄中慢慢停下，车厢重新回到昏黄而闷热的节奏里。李国强抬眼再看周围，那些刚才似乎盯着他的目光已经移开：男人低头拨着烟灰，老太太眯上了眼，年轻人则蹲下身找行李。——或许，刚才只是自己多心了。
 
-胸口的那股绷紧感慢慢散去，呼吸也顺了些，可怀里那团旧报纸包依旧沉甸甸地压着，让他心里隐隐发堵：**怎么就摊上这事儿了？**要是真放在一边装作没看见，又说不过去——人家托付了，总得想办法办到。
+胸口的那股绷紧感慢慢散去，呼吸也顺了些，可怀里那团旧报纸包依旧沉甸甸地压着，让他心里隐隐发堵：“怎么就摊上这事儿了？”
+
+要是真放在一边装作没看见，又说不过去——人家托付了，总得想办法办到。
 
 他抬手揉了揉太阳穴，视线落到窗外掠过的枯草和电线杆，像是在给自己找个缓冲的空隙。
 
@@ -880,65 +884,6 @@ window.NOVEL_TEXT = `
 })();
 
 /* 完成观察器：忽略 contentAllGenerated，直接用 atBottom 判定触发 finishReading */
-
-/*  === 手动结束补丁：在文末插入“读完了”按钮，点击才结束 === */
-
-(function(){
-  // 开启手动结束模式（禁用滚动自动结束）
-  window.__manualFinish = true;
-
-  // 1) 覆写 atBottom，使 onScroll 永远判不到“到底部”
-  if (typeof window.atBottom === 'function') {
-    const __origAtBottom = window.atBottom;
-    window.atBottom = function(){
-      if (window.__manualFinish) return false;
-      return __origAtBottom();
-    };
-  }
-
-  // 2) 在小说渲染完后，往 #reading-text 末尾插入“读完了”按钮
-  function injectDoneButton(){
-    const host = document.getElementById('reading-text');
-    if (!host || document.getElementById('done-btn')) return;
-
-    const wrap = document.createElement('div');
-    wrap.style.margin = '2rem 0 3rem';
-    wrap.style.textAlign = 'center';
-
-    const btn = document.createElement('button');
-    btn.id = 'done-btn';
-    btn.className = 'button';
-    btn.textContent = '读完了';
-    btn.style.padding = '0.7rem 1.2rem';
-    btn.style.fontSize = '1rem';
-    btn.style.borderRadius = '10px';
-
-    wrap.appendChild(btn);
-    host.appendChild(wrap);
-
-    // 点击后才结束：停止计时、显示用时与 Next
-    btn.addEventListener('click', function(){
-      window.__manualFinish = false; // 允许后续逻辑正常运行
-      if (typeof window.finishReading === 'function') {
-        window.finishReading();
-      }
-    });
-  }
-
-  // 3) 等开始阅读后再注入按钮（确保小说内容已渲染）
-  const startBtn = document.getElementById('start-btn');
-  if (startBtn) {
-    startBtn.addEventListener('click', function(){
-      setTimeout(injectDoneButton, 150); // 等渲染完成再插
-    });
-  } else {
-    document.addEventListener('DOMContentLoaded', injectDoneButton);
-  }
-
-  // 4) 保险：禁止滚动时追加占位段落
-  window.maybeAddParagraph = function(){ /* no-op */ };
-
-})();
 </script>
 <script>
 // 提前解析 URL 参数，给全局 MODE（供下面补丁用）
@@ -957,57 +902,6 @@ window.NOVEL_TEXT = `
 })();
 </script>
 
-
-
-
-<script>
-/* 突变（abrupt）极简补丁：不钩子 tickTimer，独立计时；放在 </body> 前 */
-(function () {
-  const qs = new URLSearchParams(location.search);
-  const MODE = (qs.get('mode') || 'grad').toLowerCase(); // 'grad' | 'abrupt'
-  if (MODE !== 'abrupt') return;
-
-  const ABRUPT_AT = 3; // 秒：到这个时间瞬时切换，可按需改
-
-  // 禁止开场渐变：保持起始色，等到点再切换
-  window.setBodyBackgroundToEnd = function () {
-    document.body.style.transition = 'none';
-    document.body.style.backgroundColor = (typeof BG_START !== 'undefined' ? BG_START : '#fdf6ed');
-  };
-
-  function applyEndStylesNow() {
-    // 背景瞬时切到终点（无动画）
-    document.body.style.transition = 'none';
-    document.body.style.backgroundColor = (typeof BG_END !== 'undefined' ? BG_END : '#94918c');
-    // 文本样式一次性切到 progress=1
-    if (typeof styleAtProgress === 'function') {
-      const s = styleAtProgress(1);
-      document.querySelectorAll('.dynamic').forEach(el => {
-        el.style.fontSize = s.fontSize;
-        el.style.lineHeight = s.lineHeight;
-        el.style.letterSpacing = s.letterSpacing;
-        el.style.fontVariationSettings = s.fontVariationSettings;
-        el.dataset.styleApplied = 'true';
-      });
-    }
-  }
-
-  // 独立轮询 activeSeconds()，不依赖 tickTimer/全局变量
-  let applied = false;
-  const timer = setInterval(() => {
-    if (applied) { clearInterval(timer); return; }
-    // 如果页面已结束，也停表
-    if (typeof readingFinished !== 'undefined' && readingFinished) { clearInterval(timer); return; }
-
-    const secs = (typeof activeSeconds === 'function') ? activeSeconds() : 0;
-    if (secs >= ABRUPT_AT) {
-      applied = true;
-      clearInterval(timer);
-      applyEndStylesNow();
-    }
-  }, 200);
-})();
-</script>
 
 <script>
 /* 修复补丁 1：强制注入“读完了”按钮 + 只有点击才结束 */
@@ -1127,6 +1021,7 @@ window.NOVEL_TEXT = `
 
 </body>
 </html>
+
 
 
 
