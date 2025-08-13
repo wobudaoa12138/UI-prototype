@@ -33,7 +33,7 @@
 
         // 阅读完成后跳转链接
         let NEXT_FORM_URL = 'https://example.com/next-form';  // ←替换成你的真实地址
-
+        </script>
     <script>
 // ===== A/B 组串联：根据 group + part 选择下一步问卷，透传参数 =====
 (function () {
@@ -83,7 +83,7 @@
 })();
 </script>
     
-    </script>
+    
     <!-- ======================= -->
 
     <style>
@@ -958,44 +958,8 @@ window.NOVEL_TEXT = `
 </script>
 
 
-<script>
-// ===== A/B 组串联：根据 group + part 选择下一步问卷，透传参数 =====
 
-// 读取入口参数
-const __qs = new URLSearchParams(location.search);
-const GROUP = (__qs.get('group') || 'A').toUpperCase();   // 'A' | 'B'
-const MODE  = (__qs.get('mode')  || 'grad').toLowerCase(); // 'grad' | 'abrupt'
-const PART  = (__qs.get('part')  || '1');                  // '1' | '2'
 
-// 需要一路透传的参数（例如被试看码）
-const carry = new URLSearchParams();
-['group','mode','code'].forEach(k => { const v = __qs.get(k); if (v) carry.set(k, v); });
-
-// 配置：四张“后测问卷”的地址（按你的实际替换）
-const FORM_URLS = {
-  A: {
-    afterPart1: 'https://forms.office.com/e/qgMr1LNeC9',
-    afterPart2: 'https://forms.cloud.microsoft/e/LLQnkw0X4a'
-  },
-  B: {
-    afterPart1: 'https://forms.office.com/e/n1pHyK1XQM',
-    afterPart2: 'https://forms.office.com/e/enKNgGN3Sv'
-  }
-};
-
-// 计算下一步 URL：part=1 -> afterPart1；part=2 -> afterPart2
-(function computeNext(){
-  const dict = FORM_URLS[GROUP] || FORM_URLS.A;
-  let next = dict[PART === '1' ? 'afterPart1' : 'afterPart2'] || dict.afterPart1;
-  if (carry.toString()) next += (next.includes('?') ? '&' : '?') + carry.toString();
-
-  // 覆写你原来的 NEXT_FORM_URL / goToNextForm
-  NEXT_FORM_URL = next;
-  window.NEXT_FORM_URL = next; 
-  console.log('NEXT_FORM_URL =', next)
-})();
-</script>
-<script>
 <script>
 /* 突变（abrupt）极简补丁：不钩子 tickTimer，独立计时；放在 </body> 前 */
 (function () {
@@ -1163,6 +1127,7 @@ const FORM_URLS = {
 
 </body>
 </html>
+
 
 
 
