@@ -1,0 +1,1098 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>阅读渐变原型（读完计时版）</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet">
+
+    <!-- ==== 可调参数（这里改） ==== -->
+    <script>
+        // 总段落数（包含初始段落）
+        const MAX_PARAGRAPHS = 180;
+        const INITIAL_PARAGRAPHS = 30;
+
+        // 渐变时长（只影响背景与排版过渡，不影响计时）
+        const TRANSITION_SECONDS = 480;
+
+        // 背景与排版起止值
+        const BG_START = '#fdf6ed';
+        const BG_END = '#94918c';
+
+        const FONT_SIZE_START = 16;         // px
+        const FONT_SIZE_DELTA = 4;          // px
+
+        const LINE_HEIGHT_START = 1.6;
+        const LINE_HEIGHT_DELTA = 0.2;
+
+        const WEIGHT_START = 500;           // Inter variable font weight
+        const WEIGHT_DELTA = 200;           // clamp to [100, 900]
+
+        const TRACKING_START = 0.5;         // px
+        const TRACKING_DELTA = 0.3;         // px
+
+        // 阅读完成后跳转链接
+        const NEXT_FORM_URL = 'https://example.com/next-form'; // ←替换成你的真实地址
+    </script>
+    <!-- ======================= -->
+
+    <style>
+        :root {
+            --bg-start: #fdf6ed;
+            --bg-end: #94918c;
+            --transition-s: 300;
+            --fs-start: 16; /* px */
+            --fs-delta: 4; /* px */
+
+            --lh-start: 1.6; /* unitless */
+            --lh-delta: 0.2;
+            --wght-start: 500;
+            --wght-delta: 200;
+            --trk-start: 0.5; /* px */
+            --trk-delta: 0.3; /* px */
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 1rem;
+            font-family: 'Inter', sans-serif;
+            color: #000;
+            max-width: 100%;
+            background-color: var(--bg-start);
+            transition: background-color calc(var(--transition-s) * 1s) linear;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            body {
+                transition: none !important;
+            }
+
+            .dynamic {
+                transition: none !important;
+            }
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .button {
+            padding: 0.6rem 1rem;
+            font-size: 1rem;
+            cursor: pointer;
+            border: 1px solid rgba(0,0,0,.2);
+            border-radius: 10px;
+            background: #fff;
+        }
+
+        .timer {
+            position: fixed;
+            bottom: 1rem;
+            right: 1rem;
+            background-color: rgba(0,0,0,0.08);
+            padding: 0.35rem 0.6rem;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            z-index: 20;
+            user-select: none;
+        }
+
+        #reading-text {
+            max-width: 640px;
+            width: 100%;
+            margin: 0 auto;
+        }
+
+        #next-button {
+            margin: 1rem 0 2rem;
+            text-align: center;
+        }
+
+        #start-screen {
+            max-width: 640px;
+            margin: 12vh auto 0;
+            text-align: center;
+        }
+
+        #finish-summary {
+            text-align: center;
+            margin-top: 1rem;
+            font-size: 1rem;
+            opacity: .9;
+        }
+    </style>
+</head>
+<body>
+    <!-- 起始屏 -->
+    <div id="start-screen" role="region" aria-labelledby="start-title">
+        <h2 id="start-title">阅读任务</h2>
+        <p>点击开始后计时，读到页面结尾（全部内容加载完并滚动到底部）即完成。</p>
+        <button class="button" id="start-btn">开始阅读</button>
+    </div>
+
+    <!-- 阅读屏 -->
+    <div id="reading-screen" class="hidden" role="region" aria-labelledby="reading-title">
+        <div id="reading-text">
+            <h1 id="reading-title">第一章</h1>
+        </div>
+        <div class="timer" id="timer" aria-live="polite" aria-atomic="true">00:00</div>
+        <div id="finish-summary" class="hidden"></div>
+        <div id="next-button" class="hidden">
+            <button class="button" id="next-btn">下一步</button>
+        </div>
+    </div>
+
+    <script>
+        // ---------- 将参数同步到 CSS 变量 ----------
+        (function initParamsToCSS() {
+            const rs = document.documentElement.style;
+            rs.setProperty('--bg-start', BG_START);
+            rs.setProperty('--bg-end', BG_END);
+            rs.setProperty('--transition-s', String(TRANSITION_SECONDS));
+
+            rs.setProperty('--fs-start', String(FONT_SIZE_START));
+            rs.setProperty('--fs-delta', String(FONT_SIZE_DELTA));
+            rs.setProperty('--lh-start', String(LINE_HEIGHT_START));
+            rs.setProperty('--lh-delta', String(LINE_HEIGHT_DELTA));
+            rs.setProperty('--wght-start', String(WEIGHT_START));
+            rs.setProperty('--wght-delta', String(WEIGHT_DELTA));
+            rs.setProperty('--trk-start', String(TRACKING_START));
+            rs.setProperty('--trk-delta', String(TRACKING_DELTA));
+        })();
+
+        // ---------- 状态 ----------
+        let transitionStarted = false;
+        let sessionStartedAt = 0;    // ms（可见时段的起点）
+        let elapsedActiveMs = 0;     // ms（仅在页面可见时累计）
+        let rafId = null;
+
+        let paragraphsTotal = 0;     // 已创建段落数
+        let nextParaNumber = 1;      // 段落显示编号
+        let contentAllGenerated = false; // 是否已生成到 MAX_PARAGRAPHS
+        let readingFinished = false;     // 是否已判定完成
+
+        const container = document.getElementById('reading-text');
+        const nextButtonBox = document.getElementById('next-button');
+        const finishSummary = document.getElementById('finish-summary');
+        const startScreen = document.getElementById('start-screen');
+        const readingScreen = document.getElementById('reading-screen');
+        const timerEl = document.getElementById('timer');
+        const startBtn = document.getElementById('start-btn');
+        const nextBtn = document.getElementById('next-btn');
+
+        // ---------- 工具 ----------
+        const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+        const activeSeconds = () => Math.floor(elapsedActiveMs / 1000);
+        const pad2 = (n) => String(n).padStart(2, '0');
+
+        function progress0to1() {
+            // 用于排版/背景渐变
+            return clamp(activeSeconds() / TRANSITION_SECONDS, 0, 1);
+        }
+        function styleAtProgress(progress) {
+            const size = FONT_SIZE_START + (FONT_SIZE_DELTA * progress);
+            const line = LINE_HEIGHT_START + (LINE_HEIGHT_DELTA * progress);
+            const weight = clamp(Math.round(WEIGHT_START + (WEIGHT_DELTA * progress)), 100, 900);
+            const tracking = TRACKING_START + (TRACKING_DELTA * progress);
+            return {
+                fontSize: `${size.toFixed(2)}px`,
+                lineHeight: `${line.toFixed(2)}`,
+                letterSpacing: `${tracking.toFixed(2)}px`,
+                fontVariationSettings: `'wght' ${weight}`
+            };
+        }
+        function setBodyBackgroundToEnd() {
+            document.body.style.backgroundColor = BG_START;
+            requestAnimationFrame(() => {
+                document.body.style.backgroundColor = BG_END;
+            });
+        }
+
+        // ---------- 段落生成 ----------
+        function createParagraph(text) {
+            const p = document.createElement('p');
+            p.classList.add('dynamic');
+            p.textContent = text;
+            container.appendChild(p);
+            paragraphsTotal++;
+            return p;
+        }
+        function generateInitialParagraphs(n = INITIAL_PARAGRAPHS) {
+            for (let i = 0; i < n; i++) {
+                createParagraph(`初始段落 ${i + 1}：用于模拟阅读内容的占位文本。`);
+            }
+            nextParaNumber = n + 1;
+            if (paragraphsTotal >= MAX_PARAGRAPHS) {
+                contentAllGenerated = true;
+            }
+        }
+
+        // ---------- 首次进入视口时应用样式 ----------
+        const io = new IntersectionObserver((entries) => {
+            if (!transitionStarted) return;
+            const prog = progress0to1();
+            const s = styleAtProgress(prog);
+            for (const entry of entries) {
+                if (entry.isIntersecting && !entry.target.dataset.styleApplied) {
+                    const el = entry.target;
+                    el.style.fontSize = s.fontSize;
+                    el.style.lineHeight = s.lineHeight;
+                    el.style.letterSpacing = s.letterSpacing;
+                    el.style.fontVariationSettings = s.fontVariationSettings;
+                    el.dataset.styleApplied = 'true';
+                }
+            }
+        }, { root: null, rootMargin: '0px', threshold: 0 });
+
+        function observeNewParagraph(p) { io.observe(p); }
+
+        // ---------- 追加段落（靠接近底部触发） ----------
+        function maybeAddParagraph() {
+
+                return;
+
+            
+        }
+
+        function nearBottom() {
+            return (window.innerHeight + window.scrollY + 200) >= document.body.offsetHeight;
+        }
+
+        function onScroll() {
+            if (readingFinished) return;
+
+            if (!contentAllGenerated && nearBottom()) {
+                maybeAddParagraph();
+            }
+
+            // 内容已经全部生成，并且用户滚到了页面底部 → 完成
+            if (contentAllGenerated && atBottom()) {
+                finishReading();
+            }
+        }
+
+        function atBottom() {
+            // 更严格的“到底部”判定，避免浮点误差
+            const threshold = 2; // px
+            const bottomGap = document.documentElement.scrollHeight - window.innerHeight - window.scrollY;
+            return bottomGap <= threshold;
+        }
+
+        // ---------- 计时 ----------
+        function renderTimer() {
+            const secs = activeSeconds();
+            timerEl.textContent = `${pad2(Math.floor(secs / 60))}:${pad2(secs % 60)}`;
+        }
+
+        function tickTimer() {
+            const now = performance.now();
+            const dt = now - sessionStartedAt;
+            sessionStartedAt = now;
+            elapsedActiveMs += dt;
+            renderTimer();
+        }
+
+        function startTimer() {
+            function loop() {
+                tickTimer();
+                rafId = requestAnimationFrame(loop);
+            }
+            sessionStartedAt = performance.now();
+            rafId = requestAnimationFrame(loop);
+        }
+
+        function stopTimer() {
+            if (rafId) cancelAnimationFrame(rafId);
+            rafId = null;
+        }
+
+        // 页面可见性：隐藏则暂停，返回可见则继续
+        document.addEventListener('visibilitychange', () => {
+            if (!transitionStarted || readingFinished) return;
+            if (document.hidden) {
+                stopTimer();
+            } else {
+                sessionStartedAt = performance.now();
+                startTimer();
+            }
+        });
+
+        // ---------- 完成判定与汇总 ----------
+        function finishReading() {
+            if (readingFinished) return;
+            readingFinished = true;
+            stopTimer();
+            window.removeEventListener('scroll', onScroll, { passive: true });
+
+            const secs = activeSeconds();
+            const summary = `你已完成阅读，用时 ${pad2(Math.floor(secs / 60))}:${pad2(secs % 60)}。`;
+            finishSummary.textContent = summary;
+            finishSummary.classList.remove('hidden');
+            nextButtonBox.classList.remove('hidden');
+
+            // 你可在此处将数据发送到后端或写入本地存储
+            // 例如：console.log({ totalSeconds: secs, paragraphsTotal });
+            console.log('Reading finished:', { totalSeconds: secs, paragraphsTotal });
+        }
+
+        // ---------- 初始样式应用 ----------
+        function applyInitialStylesToExistingParagraphs() {
+            const s = styleAtProgress(0);
+            document.querySelectorAll('.dynamic').forEach(p => {
+                p.style.fontSize = s.fontSize;
+                p.style.lineHeight = s.lineHeight;
+                p.style.letterSpacing = s.letterSpacing;
+                p.style.fontVariationSettings = s.fontVariationSettings;
+                p.dataset.styleApplied = 'true';
+            });
+        }
+
+        // ---------- 流程 ----------
+        function startExperiment() {
+            startScreen.classList.add('hidden');
+            readingScreen.classList.remove('hidden');
+
+            generateInitialParagraphs(INITIAL_PARAGRAPHS);
+            document.querySelectorAll('.dynamic').forEach(observeNewParagraph);
+
+            // 视口较短时，预加载一段，避免一开始就触底
+            if (nearBottom()) maybeAddParagraph();
+
+            transitionStarted = true;
+
+            if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                setBodyBackgroundToEnd();
+            }
+
+            applyInitialStylesToExistingParagraphs();
+            startTimer();
+            window.addEventListener('scroll', onScroll, { passive: true });
+        }
+
+        function goToNextForm() { window.location.href = NEXT_FORM_URL; }
+
+        // ---------- 事件 ----------
+        startBtn.addEventListener('click', startExperiment);
+        nextBtn.addEventListener('click', goToNextForm);
+        startBtn.addEventListener('keyup', (e) => { if (e.key === 'Enter' || e.key === ' ') startExperiment(); });
+        nextBtn.addEventListener('keyup', (e) => { if (e.key === 'Enter' || e.key === ' ') goToNextForm(); });
+    </script>
+    <!-- ===== 小说正文（上下半用 [[SPLIT]] 分隔；?part=1/2 选择） ===== -->
+<script>
+window.NOVEL_TEXT = `
+# 第一章
+候车室里弥漫着煤炉的味道，炉子边围着几个人烤手，偶尔有人伸脚踢一踢炉壁，让煤渣重新燃旺。铁皮炉门的缝里透出一线红光，烘得空气里带着一股焦煤和铁锈的味道。
+
+窗子上蒙着一层白气，外头的雪花贴上去，化成水珠缓缓往下淌。门口时不时灌进一阵冷风，吹得人缩着脖子。广播用沙哑的女声一遍遍播着车次和进站时间，节奏缓慢又机械。
+
+李国强坐在靠门的一条长椅上，灰色帆布包立在脚边，双腿并着，手里捧着搪瓷缸喝水。一路从县里赶来，赶早不赶巧，离开车还有半个多小时。
+
+旁边一个背着两大袋行李的妇女经过，军绿色的尼龙袋子塞的满满当当快要溢了出来，整个人看起来像个蜗牛。
+
+“这帽子看着快要掉了”，李国强看着袋口想到。
+
+好巧不巧，没走出两步远，那摇摇欲坠的帽子就在李国强的注视下，从袋口一路掉在了地上。
+
+看着她腾不出手来捡起这帽子，只能准备把沉重的包裹从肩上卸下来。
+
+“我来吧”，李国强猛地起身，“你这要放下来再上肩可不容易。”
+
+“谢谢你啊，同志”，妇女感激道。
+
+他弯腰捡起帽子，起身把它塞进了袋子，还往里怼了两下。
+
+李国强乐呵呵地，“小事，举手之劳。”
+
+小插曲过后，他又回到位置上抱着搪瓷缸。
+
+一个戴棉帽的中年人走过来，拍了拍他身边的空位：“同志，这儿有人吗？”
+
+李国强抬起头，见对方满脸风霜，手指冻得有些发红，摇了摇头：“没有。”
+
+中年人坐下，把手从棉袄袖子里伸出来搓了搓，笑着说：“去省城办事？”
+
+“嗯，去看病人。”
+
+“家里老人？”
+
+“是我舅舅。上个月他干活从屋檐摔下来，脑子里出了血，前两天才转到省城医院。我爹娘离不开地里的活，就让我请了两天假去看看。”
+
+中年人点了点头：“唉，家里有病人，心里总是惦记着。”又问，“你是做什么工作的？”
+
+“粮站。”李国强笑笑，“算是个正式工，不过年底忙，清仓盘粮的时候得加班。”
+
+候车室另一头传来一声吆喝：“茶叶蛋——热腾腾的茶叶蛋——”
+声音渐近，伴着脚步声，一位身材微胖、穿着厚棉袄的大妈提着搪瓷桶走过来，盖子微微掀开，热气不断溢出，在冷空气里化作一团白雾。
+
+她先在炉子边那桌停下，给两位乘客各捞了一个茶叶蛋。铁勺碰在桶沿上发出脆响，香气顺着热气飘散开来，带着八角、桂皮、酱油的混合味。蛋壳是深褐色的，纹路细密，仿佛渗进了汤汁。
+
+走到他们这一排时，大妈笑着说：“来俩吧，路上吃，省得饿肚子。”
+
+中年人闻了闻，犹豫两秒，还是掏出口袋里的零钱：“来两个。”
+
+大妈从怀里抽出一叠旧报纸，撕下一张，用手在膝盖上捋平，捞出两个滚烫的茶叶蛋放在纸中央，手法熟练地把四角折起来包成兜状，再用细麻绳绕两圈，打了个结递过去。
+热气把报纸熏得微微变色，油渍一点点晕开，墨香被蛋香盖住。中年人接过袋子，温度透到手心，像捧着一团小火炉。
+
+大妈看着李国强：“小伙子，你也来一个？坐车可不好买热的。”
+
+李国强笑着摆手：“不用了，带了干粮。”
+
+大妈摇摇头，提着桶往另一排走去，吆喝声渐渐远了。
+
+中年人剥着蛋壳，“喀喀”地响着，边吃边说：“这年头，人多的地方可要留神，偷包的多。”
+
+李国强顺着话说：“我就是去看看病人，也没带什么值钱的东西。”
+
+中年人顿了顿，忽然压低声音：“同志，能帮我个忙吗？我得出去找个人，车快进站了，怕赶不上。这有个包，你帮我交给七号车厢的老齐——个子高，戴黑呢帽，他会认得的。”
+
+说着，他从棉袄里慢慢掏出一个用旧报纸裹着的布包，双手递过来。
+
+李国强愣了一下：“这……是什么东西啊？”
+
+“重要文件。”中年人答得干脆，神情有点紧，“我可能一时回不来，你帮我交一下，也就一句话的事。”
+
+广播忽然在头顶响起：“T472 次列车即将进站，请旅客准备检票。”那不是他的车次，是一趟开往南方的车。
+
+中年人眼睛一闪，站起身：“同志，就交给你了！谢谢了！”
+话音未落，他已经把布包和两张粮票一块塞进李国强怀里，拍了拍他的胳膊，然后顺着那趟车的检票口挤了进去，很快消失在人群里。
+
+李国强愣愣地坐着，手里还攥着那只包。报纸包表面有点发潮，摸上去不算重，像是软布叠起来的形状。捏一捏，能感到里面有一块稍硬的棱角，却不突出。
+他低头看了两眼，又放回膝盖上，双手搭着，目光飘向窗外的雪。
+想到舅舅在医院病床上的样子，又想着自己请假回去要补的工时，不觉出了神。
+
+等他回过神时，广播里才响起自己那趟车的进站提示。他提起帆布包，把那只旧报纸包夹在腋下，跟着人流走向检票口。
+
+---
+广播在候车室上空回荡，女声略带回声：“Z218 次列车开始检票，请旅客按顺序进站。”
+李国强拎好帆布包，把那只旧报纸包夹在腋下，随人流向检票口挪动。厚棉衣让人显得笨重，肩膀碰肩膀，脚下的步子被挤得很短，只能随着前面的人一步步往前。
+
+检票员戴着粗线手套，撕票的动作又快又利落，票口收齐后用手一示意，便让人上站台。风从检票口的空隙灌进来，夹着外面刺骨的凉意，钻到衣领里。
+
+站台的风，比候车室里更冲。远处车头冒着白汽，像一头喘气的铁兽。列车铁皮外壳上粘着雪渍，沿着窗框和车门接缝处结了薄霜。人潮在站台上铺开，有背藤筐的，有拖木箱的，还有人两手各提一串用麻绳捆紧的行李卷。脚步声、吆喝声、孩子的尖笑混在一起，像一条杂乱却不断向前的河。
+
+他在风里念叨着“七号、七号”，找到了“7”的白漆号牌。踏上金属踏板时，脚下一滑，幸好扶住了门边的铁杆才没栽下去。
+
+刚挤进门，热气夹着煤炉味、湿棉衣味扑面而来，还混着烟草、咸鱼干和花生壳的味道。车厢的灯光昏黄，照得木地板泛着暗光。行李架上堆满了编织袋、行李卷、竹篮子，甚至还有一团团被褥用布条紧紧捆着，压得铁杆轻轻弯下去。
+
+靠窗的乘客缩在棉袄里打盹，嘴角冒着哈气；年轻人抱着孩子轻拍后背，孩子的手在空气里胡乱抓。靠过道的座位边，有人剥花生壳，壳子“啪”地落在地板上，被鞋底一蹭，滑到座椅底下。
+
+老齐只给了三个标记：高个儿、黑呢帽、七号车厢。
+李国强并不认识那人，只能按这三样去找。
+
+他沿着过道缓缓前行，眼睛在乘客之间来回扫。靠窗第一排，有个戴黑呢帽的老头，帽檐下的脸满是皱纹，个子明显不高；再往前，靠过道的中年男人也戴着黑帽，可身形瘦而矮，帽檐下是一双细小的眼睛，正低头翻搪瓷饭盒里的馒头。
+他停下脚，客气地问：“同志，请问您是老齐吗？”
+男人抬起头，表情茫然，摇摇头：“不是。”
+
+李国强笑笑，继续向前。走到车厢中段时，遇到两个年轻小伙子，个头够高，却戴的是棉帽外翻的样式。他在过道稍稍探头看了看他们的脸——一个正嚼着咸菜馒头，另一个埋头看报纸——都不像。
+
+到了连接处，他拦住一位穿蓝棉制服的列车员，小声问：“同志，这节车厢有个高个儿、戴黑呢帽的人吗？”
+列车员皱了皱眉，想了两秒摇头：“没注意，车上人多。”说完抱着茶壶往另一头走了。
+
+他只好折回，步子放慢，把靠过道的座位又细看了一遍。有人把棉帽压得极低，只露出半张脸，却个头不够；有位妇人正给孩子剥橘子，手上忙得很，压根没注意他。
+他在木地板的吱呀声里走了一圈，心里的期待慢慢缩下去。也许人还没上车，或者换到别的车厢了。一丝无奈涌上来，他想，先守在这节车厢看看。
+
+火车启动时的低鸣透过地板传来，像一阵厚重的潮水。李国强退到车门附近的一处空当，把帆布包放在脚边，旧报纸包搁在膝头。车厢轻轻晃动，人群的声音被压低，变成一片嗡嗡的背景。
+
+他抬头望着窗外，站台缓缓后退。霜花爬满的玻璃上，影子一闪一闪地掠过去——有人走，有人挥手，有人抱着东西急急跑着。火车驶出站台，风声开始贴在车皮上摩擦，像一阵阵低语。
+
+恰在这时，过道里有人抬着行李卷挤过来，肩角顶在座椅扶手上，扶手回弹，“哐”地磕在他膝头的包角。旧报纸表面“嗤”地裂开一道细缝，像嘴角被扯了一下。缝里露出灰蓝色的布头，布面紧实，纹路细密；再往里，是一抹更深的颜色，边缘微微发硬，像被水浸过又干了——也像陈旧的血痕。
+
+他的指尖在那一瞬停住，随即下意识把裂口按住。呼吸变浅：这东西，到底是什么？
+
+他正要把纸角抚平，过道里挤来一位年轻妈妈，怀里紧紧抱着一个裹在红花棉被里的婴儿。她侧着身，小步挪着：“借过——劳驾——”
+婴儿睁着一双乌溜溜的眼睛四下打量，眼珠转了两圈，忽然被李国强膝头上的旧报纸包吸引，胖乎乎的小手从被角里探出来，朝着那裂口处伸去。
+“哎——”李国强几乎是反射地把包一抱，像揽住一团烫手的东西。小手指尖在空中虚虚划过，离纸面只差一点点。
+年轻妈妈忙道：“同志，对不住，孩子爱抓东西。”她把婴儿更靠上地托住，低头匆匆挤了过去。
+
+刚走出两步，婴儿忽然“哇——”地哭起来，尖细的声音一下盖过了车厢里的嗡嗡谈话。妈妈轻轻晃着哄：“不哭，不哭——”可哭声反而更急，像一根细针扎在耳边，一下、又一下地顶着心口。
+
+李国强抱紧了怀里的旧报纸包，视线下意识扫向四周。靠门的男人叼着半截烟，似乎在看他；靠窗的老太太抬起眼皮，目光恰好落在他怀里那团东西上；过道里端着搪瓷缸的年轻人走过时，眼神像水面一样掠过去——但不知为什么，他总觉得那目光在纸面上多停了半秒。
+
+心里的紧张像炉火里跃起的一簇小焰——不大，却总舔着心口。
+他把包往内侧挪了挪，肩膀微微收紧，像要把什么遮住。
+
+婴儿的哭声终于在母亲轻轻的拍哄中慢慢停下，车厢重新回到昏黄而闷热的节奏里。李国强抬眼再看周围，那些刚才似乎盯着他的目光已经移开：男人低头拨着烟灰，老太太眯上了眼，年轻人则蹲下身找行李。——或许，刚才只是自己多心了。
+
+胸口的那股绷紧感慢慢散去，呼吸也顺了些，可怀里那团旧报纸包依旧沉甸甸地压着，让他心里隐隐发堵：**怎么就摊上这事儿了？**要是真放在一边装作没看见，又说不过去——人家托付了，总得想办法办到。
+
+他抬手揉了揉太阳穴，视线落到窗外掠过的枯草和电线杆，像是在给自己找个缓冲的空隙。
+算了，等这趟临时停车过去，再走一遍车厢——哪怕只是碰碰运气。
+
+[[SPLIT]]
+
+# 第三章
+李国强抱起包裹，沿着窄窄的过道往前挤。车轮和铁轨接触的节奏声从脚底传来，伴着车身轻轻的晃动，像一首单调又催人的鼓点。
+
+连接两节车厢的铁皮门缝里灌进一股冷风，夹着煤烟和机油味，让人下意识缩了缩脖子。脚下的铁板随着车身一颤，发出“哐啷”一声，他抬脚跨过接缝，进入隔壁车厢。
+
+这里的空气比上一节还要闷一些，混合着饭菜味、香烟味，还有方便面的香气。靠近车厢一端的热水供应处，几个乘客正排着队接热水。
+
+有人拿着铝饭盒，有人端着搪瓷缸，饭盒盖子微微翘起，露出里面蜷曲的面条和一圈泛着油光的汤水，热气从盖缝里直冒上来，带着碎葱花和调料的味道，在狭窄的过道中弥漫开来。偶尔有人手滑，热水溅到手背上，猛地一缩手，嘴里吸着凉气。
+
+靠窗的几个年轻人挤在一排硬座上，一个人拿着口琴，手指在风口间灵活移动，吹着《在那桃花盛开的地方》。调子一起，旁边两个人便跟着唱了起来，嗓子不算多好，却唱得格外投入，时不时还闭上眼睛晃着头。
+
+他们已经沉浸在自己的艺术里不能自拔了。
+
+坐在走廊另一边的一个老太太皱着眉翻了个白眼，又转过身去不看他们。
+
+靠近车门的地方，一群穿着棉袄的中年男人蹲在地上打扑克牌，纸牌在他们冻得发红的手指间翻飞，嘴里喊着：“三带一！”、“炸！”
+
+“老王你这是出千了吧！”
+
+“去去去，你看到了吗就说我出千。”
+
+ 旁边探头看牌的也插嘴起哄，笑声、牌声和车轮声混成一片，热闹的像个集市。
+
+人与人的悲欢并不相通，李国强只觉得他们吵闹。
+
+李国强在人群间穿行，目光仔细扫过每一个戴帽子的高个子男人。几个看着差不多的人，不是身形不对，就是帽子颜色不符。
+
+他的步伐不快，却很有节奏，每走几步就会停下来打量一下。
+
+他耐着性子走到一位靠窗的高个子面前，轻声问：“同志，您是老齐吗？”
+
+对方抬头，露出一张陌生的脸，摇了摇头：“找错人了。”
+
+他又拦下一个端着热水回座的人，得到的依旧是否定。
+
+心里有些发凉，他走到乘务员那里，把描述又说了一遍：“高个子，戴黑呢帽。”
+
+乘务员想了想，说没印象，让他再自己找找。
+
+李国强只得抱着包裹又走了一遍。
+
+越走越觉着手里的东西变重了，脚步也不自觉地变快。
+
+他挑了个身高差不多、帽子颜色也接近的男人问：“您是不是老齐？”
+
+那人愣了一下，笑骂：“我他娘的叫老李。”
+
+正当他打算放弃时，一个穿灰呢大衣的中年男子从过道另一头走来，目光在包裹上停了片刻，才抬眼笑道：“同志，你找老齐吗？”
+
+李国强一愣，点点头：“对。你是？”
+
+“他临时有事下车了，让我来取东西。”男子的声音很自然。
+
+李国强犹豫了一下，问：“那您知道这里面是什么吗？”
+
+男子只顿了半秒，随口说：“一些文件。”
+
+李国强眼神一转，故意说：“那我打开看看？”
+
+男子脸上的笑容稍稍一僵，随即摆摆手：“不用不用，你放心交给我就行了，我先去上个厕所，一回再来。”
+
+话没说完，他已经往车厢另一头走去，身影很快被人群吞没。
+
+李国强站在原地，手心微微出汗，心口发紧，仿佛车厢的热气也变得沉甸甸的。
+
+“这可咋办”他想道，“这人一看就有点不太对，我这是让人盯上了？”。
+
+他找了个空座坐下，“连个联系方式也没有，总不能这烫手山芋最后就落我手里了吧？”
+
+虽说是坐着休息，但总感觉屁股下面坐着不舒服。
+
+“诶，你会不会玩牌？”旁边的人搭话道。
+
+李国强摇头回绝，“不了不了，我在找人”
+
+“嗨，看你来回走好几圈了，反正也没找到，不如先打会儿牌。”他拿出了扑克，“说不定，打个两圈你找那人就来了。”
+
+另一个人附和道“是呗，正好我俩缺个人。”
+
+李国强犹豫了一下，还是摇了摇头“还是算了吧，我再去别的车厢找找，谢谢你们啊。”
+
+他站了起来，又向着下一个车厢走去。
+
+
+---
+# 第四章
+李国强正走在两节车厢的连接处，铁皮门被风吹得微微颤动，发出细碎的金属响。
+
+他又找了两个车厢，依旧是徒劳无功。本想回到座位歇一会儿，却听见身后传来一阵急促的脚步声。
+
+回头一看，先前那个穿灰呢大衣的男子正快步走来，呼吸比刚才急促了许多，脸上带着似笑非笑的表情。
+
+“同志，真不好意思啊，刚才走的有点急，差点忘这事儿了。”他说着伸手就去够李国强怀里的包裹，“老齐刚才说让我一定收好，我这会儿正好能带走。”
+
+李国强往后一缩，把包裹抱得更紧，警惕道：“您刚不是去厕所了吗？”
+
+“哎呀，刚才尿急嘛，一转眼你人就不见了。”
+
+“可你刚才说老齐......下车了来着？”
+
+男子笑容一僵，嘴角抽了抽，语气变硬：“你怎么这么多事？放心，我是自己人”
+
+没等李国强反应，男子已经伸手去夺。包裹被猛地一拽，勒得李国强的胳膊生疼。
+
+座位两边的乘客察觉到不对，纷纷往旁边让开。包裹在两人手里来回拉扯，硬纸板摩擦出“吱啦”的声音。李国强一咬牙，不肯松手，额头都渗出汗来。
+
+狭窄的过道里，乘客们纷纷侧身避让，有人小声嘀咕：“咋回事啊？”
+
+“你干啥！”李国强死死攥住包，和对方僵在原地。
+
+男子用力一扯，包角蹭到一旁的座椅扶手，发出“嗤啦”一声。李国强咬牙用肩膀往前一顶，逼得男子退了半步。
+
+两人对峙间，空气似乎凝固下来，只有车轮在铁轨上的节奏声依旧冷漠地响着。
+
+“别敬酒不吃吃罚酒！”男人低声骂了一句，忽然猛地用肩膀撞向李国强。两人一下子挤到了过道中央，座椅扶手“咣”地一声磕到李国强腰侧。
+
+就在这时，车厢另一头传来一声冷厉的喝止——
+
+“放下！”
+
+一个高个子男人快步冲了过来，风雪气息还带在身上，身上那件旧呢大衣的扣子半开，里面露出暗色的夹克。
+
+李国强一看，这不正是把包裹交给他的那个人吗？
+
+他不是上了别的车吗？怎么会出现在这里？
+
+“我让你放手！”他声音低沉，却带着不容置疑的劲。
+
+灰呢大衣男子一愣，反应过来想跑，手还没松开，就被老齐一把拽住胳膊，顺势按到座位靠背上。男子吃痛，想挣扎，却被老齐的膝盖死死卡住腿。
+
+“你——”李国强还没回过神，就听那高个子从怀里掏出一枚证件在众人眼前一晃：“刑警队的。”
+
+灰呢大衣的男人被反剪着手腕，嘴里骂骂咧咧：“你早盯上我了！”
+
+“你跑得掉吗？”高个子冷笑，“这趟车我一直在，等的就是你。”
+
+李国强愣了好一会儿，想到刚才看到的证件才缓缓开口：“你……就是老齐？”
+
+高个子笑了笑，摇头：“我是姓齐，不过我让你找的老齐是我编的。”
+
+李国强仿佛懂了什么，又感觉什么都没懂。
+
+等赶来的乘警押住犯人后，老齐从李国强怀里接过包裹，拍了拍他的肩膀：“多亏你守得紧，不然指不定得多麻烦。”
+
+“这人逃了许久一直抓不到。”又掂了掂包裹，“这里面是他们的犯罪证据，就等着他上钩呢”
+
+“不过保险起见，里面的东西是假的，真的还在局里。要是真让他提前拿到了说不定就打草惊蛇了。”
+
+“小同志表现不错，回头得跟你们领导表扬一下你，你立功了小子。”又拍了拍李国强的肩膀。
+
+李国强终于缓了过来，苦笑道“你这一出戏可给我吓得够呛。”
+
+老齐略微尴尬地笑了，“害，是我草率了，今天行动之前才知道我可能暴露身份了，这才临时找上了你。有空我私下再请你一顿。”
+
+李国强这才明白过来，心口那股紧绷的劲慢慢松下来。
+
+李国强摆摆手：“理解，这也是我应该做的，别再折腾我一回就成。”
+
+老齐和乘警押着男子离开，车厢里的人才渐渐回过神来，七嘴八舌地议论起来。
+
+李国强坐回座位，长长地出了口气。
+
+车外的风雪依旧，车厢里渐渐恢复了先前的喧闹——口琴声、牌声、说笑声又重新充满了空气。
+
+他端起搪瓷缸抿了一口，水已经凉了。
+
+看着窗外的山影，听着耳旁的喧闹，突然有种不真实感。
+
+良久，突然回过神来。
+
+现在应该做的是好好休息，等下车之后还得去看望舅舅呢。
+
+“还是想想回去之后怎么加班吧。”
+
+全文完
+`;
+</script>
+
+<!-- ===== 小说渲染补丁（零侵入：覆写 generateInitialParagraphs） ===== -->
+<script>
+(function(){
+  // 解析 ?part=1/2
+  function getPartFromQuery(){
+    const p = new URLSearchParams(location.search).get('part');
+    return p === '2' ? 2 : 1; // 默认上半
+  }
+
+  // 简单的“markdown风”转DOM：#标题 / 空行分段 / --- 场景分隔
+  function toNodes(text){
+    const frag = document.createDocumentFragment();
+    const lines = text.replace(/\r\n/g, '\n').split('\n');
+    let buf = [];
+
+    function flushP(){
+      if(!buf.length) return;
+      const p = document.createElement('p');
+      p.textContent = buf.join(' ');
+      p.className = 'dynamic'; // 让你的过渡样式生效
+      frag.appendChild(p);
+      buf = [];
+    }
+
+    for(let i=0;i<lines.length;i++){
+      const line = lines[i].trimEnd();
+
+      if(!line.trim()){ flushP(); continue; }
+
+      if(/^#{1,3}\s+/.test(line)){
+        flushP();
+        const level = (line.match(/^#+/) || ['#'])[0].length;
+        const tag = level===1?'h1':(level===2?'h2':'h3');
+        const h = document.createElement(tag);
+        h.textContent = line.replace(/^#{1,3}\s+/, '');
+        h.className = 'dynamic';
+        frag.appendChild(h);
+        continue;
+      }
+
+      if(/^(-){3,}$/.test(line)){
+        flushP();
+        const hr = document.createElement('div');
+        hr.style.height = '1px';
+        hr.style.background = 'linear-gradient(90deg,transparent,rgba(0,0,0,.2),transparent)';
+        hr.style.margin = '1.2em 0';
+        frag.appendChild(hr);
+        continue;
+      }
+
+      buf.push(line);
+    }
+    flushP();
+    return frag;
+  }
+
+  // 渲染选定半篇
+  function renderSelectedHalf(){
+    const raw = (window.NOVEL_TEXT||'').trim();
+    if(!raw){ console.warn('NOVEL_TEXT 为空'); return {count:0}; }
+    const parts = raw.split('[[SPLIT]]');
+    const idx = getPartFromQuery()===2 ? 1 : 0;
+    const selected = (parts[idx] || raw).trim();
+
+    const host = document.getElementById('reading-text');
+    if(!host) return {count:0};
+    // 清空默认的“第一章”标题等
+    host.innerHTML = '';
+    host.appendChild(toNodes(selected));
+
+    // 让你的 IntersectionObserver 监听到这些新段落
+    const nodes = host.querySelectorAll('.dynamic');
+    if(typeof observeNewParagraph === 'function'){
+      nodes.forEach(observeNewParagraph);
+    }
+    return {count: nodes.length};
+  }
+
+  // —— 核心：覆写 generateInitialParagraphs，使其在开始时渲染小说 ——
+  const _oldGen = window.generateInitialParagraphs;
+  window.generateInitialParagraphs = function(){
+    // 渲染小说
+    const result = renderSelectedHalf();
+
+    // 告诉你的主流程：内容已全部生成，只等用户滚到底
+    window.paragraphsTotal = result.count || 0;
+    window.nextParaNumber = window.paragraphsTotal + 1;
+    window.contentAllGenerated = true;
+
+    // 初始样式应用（你的函数已定义）
+    if(typeof applyInitialStylesToExistingParagraphs === 'function'){
+      applyInitialStylesToExistingParagraphs();
+    }
+  };
+
+})();
+</script>
+<script>
+/* 补丁1：禁止滚动追加占位段落（保险起见再覆写一次） */
+(function(){
+  window.maybeAddParagraph = function(){ /* no-op */ };
+})();
+
+
+</script>
+<script>
+/* 禁止滚动追加占位段落（双保险） */
+(function(){
+  window.maybeAddParagraph = function(){ /* no-op */ };
+})();
+
+/* 完成观察器：忽略 contentAllGenerated，直接用 atBottom 判定触发 finishReading */
+
+<!-- === 手动结束补丁：在文末插入“读完了”按钮，点击才结束 === -->
+<script>
+(function(){
+  // 开启手动结束模式（禁用滚动自动结束）
+  window.__manualFinish = true;
+
+  // 1) 覆写 atBottom，使 onScroll 永远判不到“到底部”
+  if (typeof window.atBottom === 'function') {
+    const __origAtBottom = window.atBottom;
+    window.atBottom = function(){
+      if (window.__manualFinish) return false;
+      return __origAtBottom();
+    };
+  }
+
+  // 2) 在小说渲染完后，往 #reading-text 末尾插入“读完了”按钮
+  function injectDoneButton(){
+    const host = document.getElementById('reading-text');
+    if (!host || document.getElementById('done-btn')) return;
+
+    const wrap = document.createElement('div');
+    wrap.style.margin = '2rem 0 3rem';
+    wrap.style.textAlign = 'center';
+
+    const btn = document.createElement('button');
+    btn.id = 'done-btn';
+    btn.className = 'button';
+    btn.textContent = '读完了';
+    btn.style.padding = '0.7rem 1.2rem';
+    btn.style.fontSize = '1rem';
+    btn.style.borderRadius = '10px';
+
+    wrap.appendChild(btn);
+    host.appendChild(wrap);
+
+    // 点击后才结束：停止计时、显示用时与 Next
+    btn.addEventListener('click', function(){
+      window.__manualFinish = false; // 允许后续逻辑正常运行
+      if (typeof window.finishReading === 'function') {
+        window.finishReading();
+      }
+    });
+  }
+
+  // 3) 等开始阅读后再注入按钮（确保小说内容已渲染）
+  const startBtn = document.getElementById('start-btn');
+  if (startBtn) {
+    startBtn.addEventListener('click', function(){
+      setTimeout(injectDoneButton, 150); // 等渲染完成再插
+    });
+  } else {
+    document.addEventListener('DOMContentLoaded', injectDoneButton);
+  }
+
+  // 4) 保险：禁止滚动时追加占位段落
+  window.maybeAddParagraph = function(){ /* no-op */ };
+
+})();
+</script>
+<script>
+// 提前解析 URL 参数，给全局 MODE（供下面补丁用）
+(function(){
+  const qs = new URLSearchParams(location.search);
+  window.MODE = (qs.get('mode') || 'grad').toLowerCase(); // 'grad' | 'abrupt'
+})();
+
+// 如果是突变模式：禁止一开始的背景渐变（即 setBodyBackgroundToEnd 不做事）
+(function(){
+  if (window.MODE !== 'abrupt') return;
+  // 覆写函数，让它在突变模式下什么都不做（保持起始背景）
+  window.setBodyBackgroundToEnd = function(){ 
+    document.body.style.backgroundColor = (typeof BG_START !== 'undefined' ? BG_START : '#fdf6ed');
+  };
+})();
+</script>
+
+
+<script>
+// ===== A/B 组串联：根据 group + part 选择下一步问卷，透传参数 =====
+
+// 读取入口参数
+const __qs = new URLSearchParams(location.search);
+const GROUP = (__qs.get('group') || 'A').toUpperCase();   // 'A' | 'B'
+const MODE  = (__qs.get('mode')  || 'grad').toLowerCase(); // 'grad' | 'abrupt'
+const PART  = (__qs.get('part')  || '1');                  // '1' | '2'
+
+// 需要一路透传的参数（例如被试看码）
+const carry = new URLSearchParams();
+['group','mode','code'].forEach(k => { const v = __qs.get(k); if (v) carry.set(k, v); });
+
+// 配置：四张“后测问卷”的地址（按你的实际替换）
+const FORM_URLS = {
+  A: {
+    afterPart1: 'https://forms.office.com/你的A1问卷ID',
+    afterPart2: 'https://forms.office.com/你的A2问卷ID'
+  },
+  B: {
+    afterPart1: 'https://forms.office.com/你的B1问卷ID',
+    afterPart2: 'https://forms.office.com/你的B2问卷ID'
+  }
+};
+
+// 计算下一步 URL：part=1 -> afterPart1；part=2 -> afterPart2
+(function computeNext(){
+  const dict = FORM_URLS[GROUP] || FORM_URLS.A;
+  let next = dict[PART === '1' ? 'afterPart1' : 'afterPart2'] || dict.afterPart1;
+  if (carry.toString()) next += (next.includes('?') ? '&' : '?') + carry.toString();
+
+  // 覆写你原来的 NEXT_FORM_URL / goToNextForm
+  window.NEXT_FORM_URL = next;
+  window.goToNextForm = function(){ location.href = window.NEXT_FORM_URL; };
+})();
+</script>
+<script>
+<script>
+/* 突变（abrupt）极简补丁：不钩子 tickTimer，独立计时；放在 </body> 前 */
+(function () {
+  const qs = new URLSearchParams(location.search);
+  const MODE = (qs.get('mode') || 'grad').toLowerCase(); // 'grad' | 'abrupt'
+  if (MODE !== 'abrupt') return;
+
+  const ABRUPT_AT = 3; // 秒：到这个时间瞬时切换，可按需改
+
+  // 禁止开场渐变：保持起始色，等到点再切换
+  window.setBodyBackgroundToEnd = function () {
+    document.body.style.transition = 'none';
+    document.body.style.backgroundColor = (typeof BG_START !== 'undefined' ? BG_START : '#fdf6ed');
+  };
+
+  function applyEndStylesNow() {
+    // 背景瞬时切到终点（无动画）
+    document.body.style.transition = 'none';
+    document.body.style.backgroundColor = (typeof BG_END !== 'undefined' ? BG_END : '#94918c');
+    // 文本样式一次性切到 progress=1
+    if (typeof styleAtProgress === 'function') {
+      const s = styleAtProgress(1);
+      document.querySelectorAll('.dynamic').forEach(el => {
+        el.style.fontSize = s.fontSize;
+        el.style.lineHeight = s.lineHeight;
+        el.style.letterSpacing = s.letterSpacing;
+        el.style.fontVariationSettings = s.fontVariationSettings;
+        el.dataset.styleApplied = 'true';
+      });
+    }
+  }
+
+  // 独立轮询 activeSeconds()，不依赖 tickTimer/全局变量
+  let applied = false;
+  const timer = setInterval(() => {
+    if (applied) { clearInterval(timer); return; }
+    // 如果页面已结束，也停表
+    if (typeof readingFinished !== 'undefined' && readingFinished) { clearInterval(timer); return; }
+
+    const secs = (typeof activeSeconds === 'function') ? activeSeconds() : 0;
+    if (secs >= ABRUPT_AT) {
+      applied = true;
+      clearInterval(timer);
+      applyEndStylesNow();
+    }
+  }, 200);
+})();
+</script>
+
+<script>
+/* 修复补丁 1：强制注入“读完了”按钮 + 只有点击才结束 */
+(function () {
+  // 只允许点击按钮触发完成
+  window.__manualFinish = true;
+
+  // 让 onScroll 判不到“到底部”，避免自动完成
+  var __origAtBottom = window.atBottom || function(){ return false; };
+  window.atBottom = function () {
+    if (window.__manualFinish) return false;
+    return __origAtBottom();
+  };
+
+  // 注入按钮（若不存在）
+  var injected = false;
+  function injectDoneButton() {
+    if (injected) return;
+    var host = document.getElementById('reading-text');
+    if (!host) return;
+    if (document.getElementById('done-btn')) { injected = true; return; }
+
+    var wrap = document.createElement('div');
+    wrap.style.margin = '2rem 0 3rem';
+    wrap.style.textAlign = 'center';
+
+    var btn = document.createElement('button');
+    btn.id = 'done-btn';
+    btn.className = 'button';
+    btn.textContent = '读完了';
+    btn.style.padding = '0.7rem 1.2rem';
+    btn.style.fontSize = '1rem';
+    btn.style.borderRadius = '10px';
+
+    btn.addEventListener('click', function () {
+      window.__manualFinish = false;           // 放开“到底部”判断（以后如需）
+      if (typeof window.finishReading === 'function') window.finishReading();
+    });
+
+    wrap.appendChild(btn);
+    host.appendChild(wrap);
+    injected = true;
+  }
+
+  // 开始阅读后再插入（你的内容渲染完成后）
+  var startBtn = document.getElementById('start-btn');
+  if (startBtn) {
+    startBtn.addEventListener('click', function () {
+      setTimeout(injectDoneButton, 200);
+    });
+  }
+
+  // 兜底：轮询最多 10 秒，确保按钮出现
+  var t0 = 0;
+  var poll = setInterval(function () {
+    if (injected) { clearInterval(poll); return; }
+    // 只有阅读屏已显示时再尝试
+    var rs = document.getElementById('reading-screen');
+    if (rs && !rs.classList.contains('hidden')) injectDoneButton();
+    t0 += 200;
+    if (t0 > 10000) clearInterval(poll);
+  }, 200);
+})();
+</script>
+
+<script>
+/* 修复补丁 2：突变（abrupt）最小实现——独立计时、按秒瞬切 */
+(function () {
+  var qs = new URLSearchParams(location.search);
+  var MODE = (qs.get('mode') || 'grad').toLowerCase(); // 'grad' | 'abrupt'
+  if (MODE !== 'abrupt') return;
+
+  var ABRUPT_AT = 120; // 秒：到这个时间立刻切换，可自行改
+
+  // 禁掉开场的背景渐变：保持起始色，等到点再切到终态
+  window.setBodyBackgroundToEnd = function () {
+    document.body.style.transition = 'none';
+    document.body.style.backgroundColor = (typeof BG_START !== 'undefined' ? BG_START : '#fdf6ed');
+  };
+
+  function applyEndStylesNow() {
+    // 背景瞬切到终态
+    document.body.style.transition = 'none';
+    document.body.style.backgroundColor = (typeof BG_END !== 'undefined' ? BG_END : '#94918c');
+
+    // 文本样式一次性切到 progress=1
+    if (typeof styleAtProgress === 'function') {
+      var s = styleAtProgress(1);
+      document.querySelectorAll('.dynamic').forEach(function (el) {
+        el.style.fontSize = s.fontSize;
+        el.style.lineHeight = s.lineHeight;
+        el.style.letterSpacing = s.letterSpacing;
+        el.style.fontVariationSettings = s.fontVariationSettings;
+        el.dataset.styleApplied = 'true';
+      });
+    }
+  }
+
+  // 独立轮询 activeSeconds，不依赖你的计时器内部实现
+  var fired = false;
+  var watch = setInterval(function () {
+    if (fired) { clearInterval(watch); return; }
+    if (typeof activeSeconds !== 'function') return;
+    // 若已经结束，则退出
+    if (typeof readingFinished !== 'undefined' && readingFinished) { clearInterval(watch); return; }
+
+    var secs = activeSeconds();
+    if (secs >= ABRUPT_AT) {
+      fired = true;
+      clearInterval(watch);
+      applyEndStylesNow();
+    }
+  }, 250);
+})();
+</script>
+
+
+</body>
+</html>
