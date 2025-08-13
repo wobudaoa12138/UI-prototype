@@ -33,6 +33,55 @@
 
         // 阅读完成后跳转链接
         let NEXT_FORM_URL = 'https://example.com/next-form';  // ←替换成你的真实地址
+
+    <script>
+// ===== A/B 组串联：根据 group + part 选择下一步问卷，透传参数 =====
+(function () {
+  // 读取入口参数
+  const qs   = new URLSearchParams(location.search);
+  const GROUP = (qs.get('group') || 'A').toUpperCase();   // 'A' | 'B'
+  const MODE  = (qs.get('mode')  || 'grad').toLowerCase();// 'grad' | 'abrupt'
+  const PART  = (qs.get('part')  || '1');                 // '1' | '2'
+
+  // 需要一路透传的参数（例如被试看码）
+  const carry = new URLSearchParams();
+  ['group','mode','code'].forEach(k => {
+    const v = qs.get(k);
+    if (v) carry.set(k, v);
+  });
+
+  // 表单链接（修正成唯一域名）
+  const FORM_URLS = {
+    A: {
+      afterPart1: 'https://forms.office.com/e/qgMr1LNeC9',
+      afterPart2: 'https://forms.cloud.microsoft/e/LLQnkw0X4a'
+    },
+    B: {
+      afterPart1: 'https://forms.office.com/e/n1pHyK1XQM',
+      afterPart2: 'https://forms.office.com/e/enKNgGN3Sv'
+    }
+  };
+
+  // 计算下一步 URL
+  const dict = FORM_URLS[GROUP] || FORM_URLS.A;
+  let next = dict[PART === '1' ? 'afterPart1' : 'afterPart2'] || dict.afterPart1;
+  if (carry.toString()) next += (next.includes('?') ? '&' : '?') + carry.toString();
+
+  // 写回同一个变量 + 兜底重绑按钮点击
+  NEXT_FORM_URL = next;
+  window.NEXT_FORM_URL = next;
+  console.log('NEXT_FORM_URL =', NEXT_FORM_URL);
+
+  // 如果按钮已在 DOM 里，就直接把点击改成跳转到新地址（即使之前绑过也覆盖）
+  document.addEventListener('DOMContentLoaded', function () {
+    const btn = document.getElementById('next-btn');
+    if (btn) {
+      btn.onclick = () => location.href = NEXT_FORM_URL;
+    }
+  });
+})();
+</script>
+    
     </script>
     <!-- ======================= -->
 
@@ -1097,6 +1146,7 @@ const FORM_URLS = {
 
 </body>
 </html>
+
 
 
 
