@@ -32,7 +32,7 @@
         const TRACKING_DELTA = 0.3;         // px
 
         // 阅读完成后跳转链接
-        const NEXT_FORM_URL = 'https://example.com/next-form'; // ←替换成你的真实地址
+        let NEXT_FORM_URL = 'https://example.com/next-form';  // ←替换成你的真实地址
     </script>
     <!-- ======================= -->
 
@@ -924,8 +924,8 @@ const FORM_URLS = {
   if (carry.toString()) next += (next.includes('?') ? '&' : '?') + carry.toString();
 
   // 覆写你原来的 NEXT_FORM_URL / goToNextForm
-  window.NEXT_FORM_URL = next;
-  window.goToNextForm = function(){ location.href = window.NEXT_FORM_URL; };
+  NEXT_FORM_URL = next;
+  window.NEXT_FORM_URL = next;  
 })();
 </script>
 <script>
@@ -1096,6 +1096,7 @@ const FORM_URLS = {
 
 </body>
 </html>
+
 
 
 
