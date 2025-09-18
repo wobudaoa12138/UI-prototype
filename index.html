@@ -284,55 +284,62 @@
         }
 
         // ---------- 首次进入视口时应用样式 ----------
-       const PRELOAD_PX = 300; // 预热带：离视窗 300px 内开始准备
+       // ---------- 预热 & 冻结：双观察器 ----------
+        const PRELOAD_PX = 300; // 预热带：离视窗 300px 内开始准备
 
-        const io = new IntersectionObserver((entries) => {
+        // A. 可见区观察器：零 rootMargin，用来“冻结/解冻”
+        const ioInview = new IntersectionObserver((entries) => {
+          for (const entry of entries) {
+            const el = entry.target;
+            if (entry.isIntersecting) {
+              // 一旦有 1px 进入真实视窗，立刻冻结，并移除预热标记
+              el.classList.add('inview');
+              el.classList.remove('prewarm');
+            } else {
+              // 完全离开可见区，允许再次预热
+              el.classList.remove('inview');
+            }
+          }
+        }, { root: null, rootMargin: '0px', threshold: 0 });
+
+        // B. 预热观察器：带 rootMargin，只在预热带里更新（且仅对非 inview）
+        const ioPrewarm = new IntersectionObserver((entries) => {
           if (!transitionStarted) return;
 
-          const p = progress0to1();
-          const s = styleAtProgress(p);
+          const s = styleAtProgress(progress0to1());
 
           for (const entry of entries) {
             const el = entry.target;
-            const r = el.getBoundingClientRect();
-            const inViewport = r.bottom > 0 && r.top < window.innerHeight;
-            const inPrewarmBand =
-              (r.top >= window.innerHeight && r.top <= window.innerHeight + PRELOAD_PX) || // 下方将入场
-              (r.bottom <= 0 && r.bottom >= -PRELOAD_PX);                                   // 上方将入场（向上滚）
-
-            // 进入真实视窗 → 冻结，不再改动
-            if (inViewport) {
-              el.classList.add('inview');
-              el.classList.remove('prewarm');
-              continue;
-            }
-
-    // 进入/停留在预热带（但还没可见）→ 这里才更新到“当前进度”
-            if (inPrewarmBand) {
-              el.classList.add('prewarm');
+            // 在扩大的观察范围内，entry.isIntersecting 为 true，表示“进入预热域”
+            if (entry.isIntersecting) {
+              // 只有当它还没在可见区（未被冻结）时才更新
               if (!el.classList.contains('inview')) {
+                el.classList.add('prewarm');
                 el.style.fontSize = s.fontSize;
                 el.style.lineHeight = s.lineHeight;
                 el.style.letterSpacing = s.letterSpacing;
                 el.style.fontVariationSettings = s.fontVariationSettings;
               }
-              continue;
+            } else {
+              // 离开预热域，去掉标记
+              el.classList.remove('prewarm');
             }
-
-            // 远离预热带与视窗：去掉标记
-            el.classList.remove('prewarm');
           }
-        }, {
-          root: null,
-          rootMargin: `${PRELOAD_PX}px 0px`, // 扩大 IO 感知范围，便于提前捕获
-          threshold: [0, 0.01]
+        }, { 
+          root: null, 
+          rootMargin: `${PRELOAD_PX}px 0px`, // 扩大感知范围＝预热带
+          threshold: 0
         });
+
+        function observeNewParagraph(p) { 
+          ioInview.observe(p);   // 负责冻结/解冻
+          ioPrewarm.observe(p);  // 负责预热更新
+        }
 
        
 
 
 
-        function observeNewParagraph(p) { io.observe(p); }
 
         // ---------- 追加段落（靠接近底部触发） ----------
         function maybeAddParagraph() {
@@ -1082,6 +1089,7 @@ window.NOVEL_TEXT = `
 
 </body>
 </html>
+
 
 
 
