@@ -240,9 +240,9 @@
         const pad2 = (n) => String(n).padStart(2, '0');
 
         function progress0to1() {
-            // 用于排版/背景渐变
-            return clamp(activeSeconds() / TRANSITION_SECONDS, 0, 1);
+        return clamp((elapsedActiveMs / 1000) / TRANSITION_SECONDS, 0, 1);
         }
+
         function styleAtProgress(progress) {
             const size = FONT_SIZE_START + (FONT_SIZE_DELTA * progress);
             const line = LINE_HEIGHT_START + (LINE_HEIGHT_DELTA * progress);
@@ -256,11 +256,13 @@
             };
         }
         function setBodyBackgroundToEnd() {
-            document.body.style.backgroundColor = BG_START;
-            requestAnimationFrame(() => {
-                document.body.style.backgroundColor = BG_END;
-            });
+          const b = document.body;
+          b.style.transition = `background-color ${getComputedStyle(document.documentElement).getPropertyValue('--transition-s').trim()}s linear`;
+          b.style.backgroundColor = BG_START;
+          void b.offsetWidth; // 关键：强制 reflow
+          requestAnimationFrame(() => { b.style.backgroundColor = BG_END; });
         }
+
 
         // ---------- 段落生成 ----------
         function createParagraph(text) {
@@ -337,6 +339,26 @@
             const secs = activeSeconds();
             timerEl.textContent = `${pad2(Math.floor(secs / 60))}:${pad2(secs % 60)}`;
         }
+        let __lastApplyMs = 0;
+        function applyTypographyForCurrentProgress() {
+          const now = performance.now();
+          if (now - __lastApplyMs < 250) return; // 250ms 一次即可
+          __lastApplyMs = now;
+
+          // 用更“顺滑”的进度（见 #3）
+          const p = progress0to1();
+          const s = styleAtProgress(p);
+
+          document.querySelectorAll('.dynamic').forEach(el => {
+            const r = el.getBoundingClientRect();
+            if (r.bottom >= 0 && r.top <= window.innerHeight) {
+              el.style.fontSize = s.fontSize;
+              el.style.lineHeight = s.lineHeight;
+              el.style.letterSpacing = s.letterSpacing;
+              el.style.fontVariationSettings = s.fontVariationSettings;
+            }
+          });
+        }
 
         function tickTimer() {
             const now = performance.now();
@@ -344,6 +366,7 @@
             sessionStartedAt = now;
             elapsedActiveMs += dt;
             renderTimer();
+            applyTypographyForCurrentProgress();
         }
 
         function startTimer() {
@@ -376,7 +399,7 @@
             if (readingFinished) return;
             readingFinished = true;
             stopTimer();
-            window.removeEventListener('scroll', onScroll, { passive: true });
+            window.removeEventListener('scroll', onScroll);
 
             const secs = activeSeconds();
             const summary = `你已完成阅读，用时 ${pad2(Math.floor(secs / 60))}:${pad2(secs % 60)}。`;
@@ -1021,6 +1044,7 @@ window.NOVEL_TEXT = `
 
 </body>
 </html>
+
 
 
 
