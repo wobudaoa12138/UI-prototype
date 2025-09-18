@@ -284,21 +284,53 @@
         }
 
         // ---------- 首次进入视口时应用样式 ----------
+       const PRELOAD_PX = 300; // 预热带：离视窗 300px 内开始准备
+
         const io = new IntersectionObserver((entries) => {
-            if (!transitionStarted) return;
-            const prog = progress0to1();
-            const s = styleAtProgress(prog);
-            for (const entry of entries) {
-                if (entry.isIntersecting && !entry.target.dataset.styleApplied) {
-                    const el = entry.target;
-                    el.style.fontSize = s.fontSize;
-                    el.style.lineHeight = s.lineHeight;
-                    el.style.letterSpacing = s.letterSpacing;
-                    el.style.fontVariationSettings = s.fontVariationSettings;
-                    el.dataset.styleApplied = 'true';
-                }
+          if (!transitionStarted) return;
+
+          const p = progress0to1();
+          const s = styleAtProgress(p);
+
+          for (const entry of entries) {
+            const el = entry.target;
+            const r = el.getBoundingClientRect();
+            const inViewport = r.bottom > 0 && r.top < window.innerHeight;
+            const inPrewarmBand =
+              (r.top >= window.innerHeight && r.top <= window.innerHeight + PRELOAD_PX) || // 下方将入场
+              (r.bottom <= 0 && r.bottom >= -PRELOAD_PX);                                   // 上方将入场（向上滚）
+
+            // 进入真实视窗 → 冻结，不再改动
+            if (inViewport) {
+              el.classList.add('inview');
+              el.classList.remove('prewarm');
+              continue;
             }
-        }, { root: null, rootMargin: '0px', threshold: 0 });
+
+    // 进入/停留在预热带（但还没可见）→ 这里才更新到“当前进度”
+            if (inPrewarmBand) {
+              el.classList.add('prewarm');
+              if (!el.classList.contains('inview')) {
+                el.style.fontSize = s.fontSize;
+                el.style.lineHeight = s.lineHeight;
+                el.style.letterSpacing = s.letterSpacing;
+                el.style.fontVariationSettings = s.fontVariationSettings;
+              }
+              continue;
+            }
+
+            // 远离预热带与视窗：去掉标记
+            el.classList.remove('prewarm');
+          }
+        }, {
+          root: null,
+          rootMargin: `${PRELOAD_PX}px 0px`, // 扩大 IO 感知范围，便于提前捕获
+          threshold: [0, 0.01]
+        });
+
+       
+
+
 
         function observeNewParagraph(p) { io.observe(p); }
 
@@ -342,16 +374,14 @@
         let __lastApplyMs = 0;
         function applyTypographyForCurrentProgress() {
           const now = performance.now();
-          if (now - __lastApplyMs < 250) return; // 250ms 一次即可
+          if (now - __lastApplyMs < 250) return; // 250ms 一次
           __lastApplyMs = now;
 
-          // 用更“顺滑”的进度（见 #3）
-          const p = progress0to1();
-          const s = styleAtProgress(p);
+          const s = styleAtProgress(progress0to1());
 
-          document.querySelectorAll('.dynamic').forEach(el => {
-            const r = el.getBoundingClientRect();
-            if (r.bottom >= 0 && r.top <= window.innerHeight) {
+          // 只更新预热带中的元素，屏幕内(inview)严格不改
+          document.querySelectorAll('.dynamic.prewarm').forEach(el => {
+            if (!el.classList.contains('inview')) {
               el.style.fontSize = s.fontSize;
               el.style.lineHeight = s.lineHeight;
               el.style.letterSpacing = s.letterSpacing;
@@ -359,6 +389,7 @@
             }
           });
         }
+
 
         function tickTimer() {
             const now = performance.now();
@@ -414,15 +445,22 @@
 
         // ---------- 初始样式应用 ----------
         function applyInitialStylesToExistingParagraphs() {
-            const s = styleAtProgress(0);
-            document.querySelectorAll('.dynamic').forEach(p => {
-                p.style.fontSize = s.fontSize;
-                p.style.lineHeight = s.lineHeight;
-                p.style.letterSpacing = s.letterSpacing;
-                p.style.fontVariationSettings = s.fontVariationSettings;
-                p.dataset.styleApplied = 'true';
-            });
+          const s = styleAtProgress(progress0to1());
+          document.querySelectorAll('.dynamic').forEach(el => {
+            const r = el.getBoundingClientRect();
+            const inViewport = r.bottom > 0 && r.top < window.innerHeight;
+            if (inViewport) {
+              // 只对当前屏内的段落套一次，然后标记为“在屏内”，后续不再动
+              el.style.fontSize = s.fontSize;
+              el.style.lineHeight = s.lineHeight;
+              el.style.letterSpacing = s.letterSpacing;
+              el.style.fontVariationSettings = s.fontVariationSettings;
+              el.classList.add('inview');   // 冻结
+            }
+          });
         }
+
+
 
         // ---------- 流程 ----------
         function startExperiment() {
@@ -1044,6 +1082,7 @@ window.NOVEL_TEXT = `
 
 </body>
 </html>
+
 
 
 
